@@ -1,0 +1,132 @@
+# Build + install-test: rewrap upstream RPM with Fedora spec
+name: equibop Fedora RPM build + install test
+on: workflow_dispatch
+env:
+  REPO_DEV: Equicord
+  REPO_NAME: Equibop
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      # fedora:44 ships no git, so actions/checkout would silently fall back to
+      # downloading a source tarball and leave no .git behind.
+      - name: Install git
+        run: sudo dnf install -y -q git
+      - name: Checkout local
+        uses: actions/checkout@v6.0.2
+        with:
+          repository: ${{ github.repository }}
+      # Steps run as root inside the container while the bind-mounted workspace
+      # is owned by the runner user (uid 1001), so git rejects the repository as
+      # dubiously owned. actions/checkout only records safe.directory in a
+      # temporary global config that it reverts.
+      - name: Mark workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install dependencies
+        run: sudo dnf install -y -q git gawk jq curl rpm-build rpmdevtools cpio desktop-file-utils appstream rpmlint
+      - name: Get latest version
+        id: step_version
+        run: |
+          latest_release_tag=$(curl -fsSL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github+json" https://api.github.com/repos/$REPO_DEV/$REPO_NAME/releases/latest | jq -r '.tag_name // empty')
+          if [ -z "$latest_release_tag" ]; then echo "ERROR: tag empty"; exit 1; fi
+          version_no_v=$(echo "$latest_release_tag" | sed 's/^v//')
+          echo "VERSION_NO_V=$version_no_v" >> "$GITHUB_OUTPUT"
+      - name: Patch spec and metainfo version
+        run: |
+          sed -i "s/^Version:.*/Version:        ${{ steps.step_version.outputs.VERSION_NO_V }}/" specs/equibop.spec
+          sed -i "s|<release version=\"[^\"]*\" date=\"[^\"]*\"|<release version=\"${{ steps.step_version.outputs.VERSION_NO_V }}\" date=\"$(date +%F)\"|" sources/org.equicord.equibop.metainfo.xml
+          head -12 specs/equibop.spec
+      - name: Validate curated AppStream metadata
+        run: |
+          appstreamcli validate --no-net sources/org.equicord.equibop.metainfo.xml
+      - name: Build RPM locally
+        run: |
+          rpmdev-setuptree
+          VERSION_NO_V="${{ steps.step_version.outputs.VERSION_NO_V }}"
+          # spectool fetches both upstream RPMs (Source0/Source1) and the GPL
+          # license text for the exact release tag (Source2). No fallback: a
+          # failed fetch fails the build.
+          cp sources/org.equicord.equibop.metainfo.xml $HOME/rpmbuild/SOURCES/
+          cp specs/equibop.spec $HOME/rpmbuild/SPECS/
+          cd $HOME/rpmbuild/SPECS
+          spectool -g -R equibop.spec
+          rpmbuild -ba equibop.spec 2>&1 | tail -15
+          ls -lh $HOME/rpmbuild/RPMS/x86_64/ $HOME/rpmbuild/RPMS/aarch64/ 2>/dev/null || ls -lh $HOME/rpmbuild/RPMS/*/
+      - name: Cross-build the aarch64 RPM and verify payload architectures
+        run: |
+          cd $HOME/rpmbuild/SPECS
+          # COPR builds every enabled chroot from the single submitted SRPM,
+          # so the aarch64 branch has to build here too. --target aarch64 is
+          # what selects %ifarch aarch64 in the spec, and with it the aarch64
+          # upstream blob; an arch-conditional Source0 that only the SRPM host
+          # fetched would fail this build with "Bad file: ...aarch64.rpm".
+          rpmbuild -bb --target aarch64 equibop.spec 2>&1 | tail -5
+          # The packaged launcher must match the package arch: an arch-mismatched
+          # source would repackage x86_64 binaries under an aarch64 NVR, which
+          # dnf cannot detect.
+          check_payload_arch() {
+            rpm_file="$1"; want="$2"
+            got=$(rpm2cpio "$rpm_file" | cpio -i --to-stdout --quiet ./opt/Equibop/equibop 2>/dev/null | head -c 64 | file -)
+            echo "$rpm_file: $got"
+            case "$got" in
+              *"$want"*) ;;
+              *) echo "ERROR: $rpm_file does not carry a $want payload"; exit 1 ;;
+            esac
+          }
+          check_payload_arch "$(ls $HOME/rpmbuild/RPMS/x86_64/equibop-*.rpm | grep -v debug | head -1)" "x86-64"
+          check_payload_arch "$(ls $HOME/rpmbuild/RPMS/aarch64/equibop-*.rpm | grep -v debug | head -1)" "ARM aarch64"
+      - name: Verify the blob is byte-identical to the upstream RPM
+        run: |
+          # The spec's contract is that /opt/Equibop ships exactly as upstream
+          # published it. Fedora's default brp hooks (brp-strip,
+          # brp-strip-comment-note, …) rewrite any ELF they see, so a silent
+          # macro change would otherwise only show up as a different binary.
+          upstream=$(ls $HOME/rpmbuild/SOURCES/equibop-*.x86_64.rpm | head -1)
+          built=$(ls $HOME/rpmbuild/RPMS/x86_64/equibop-*.rpm | grep -v debug | head -1)
+          rm -rf /tmp/payload-upstream /tmp/payload-built
+          mkdir -p /tmp/payload-upstream /tmp/payload-built
+          (cd /tmp/payload-upstream && rpm2cpio "$upstream" | cpio -idm --quiet)
+          (cd /tmp/payload-built && rpm2cpio "$built" | cpio -idm --quiet)
+          # diff exits non-zero and prints the differing files if anything in
+          # the bundle was rewritten.
+          diff -r /tmp/payload-upstream/opt /tmp/payload-built/opt
+          echo "### Blob is byte-identical to the upstream RPM :heavy_check_mark:" >> $GITHUB_STEP_SUMMARY
+      - name: Inspect built RPM Requires
+        run: |
+          # Native arch only: this is the RPM the install test below consumes.
+          rpm_file=$(ls $HOME/rpmbuild/RPMS/x86_64/equibop-*.rpm | grep -v debug | head -1)
+          echo "=== Built RPM: $rpm_file ==="
+          rpm -qpR "$rpm_file"
+          echo "REQUIRES_OUTPUT_END"
+      - name: Validate packaged desktop and AppStream metadata
+        run: |
+          rpm_file=$(ls $HOME/rpmbuild/RPMS/x86_64/equibop-*.rpm | grep -v debug | head -1)
+          rm -rf /tmp/rpmbuild-check
+          mkdir -p /tmp/rpmbuild-check
+          cd /tmp/rpmbuild-check
+          rpm2cpio "$rpm_file" | cpio -idmu --quiet
+          desktop-file-validate usr/share/applications/equibop.desktop
+          appstreamcli validate --no-net usr/share/metainfo/org.equicord.equibop.metainfo.xml
+      - name: Run rpmlint
+        run: |
+          # Both arches: the /opt Provides suppression and the libffmpeg
+          # requirement exclusion have to hold on aarch64 as well.
+          rpms="$(ls $HOME/rpmbuild/RPMS/x86_64/equibop-*.rpm | grep -v debug) $(ls $HOME/rpmbuild/RPMS/aarch64/equibop-*.rpm | grep -v debug)"
+          # rpmlintrc documents every inherent blob finding (the /opt layout,
+          # $ORIGIN RPATHs, unstripped prebuilt binaries, the non-setuid
+          # chrome-sandbox tripping the setgroups pattern, Chromium's legacy
+          # gethostbyname call, the upstream-declared lib deps invisible
+          # to the generator, dictionary misses, no docs/man page by design,
+          # symlinked binary). Anything else breaks this step.
+          rpmlint -r "$GITHUB_WORKSPACE/rpmlintrc" $rpms
+      - name: Install-test the rebuilt RPM
+        run: |
+          # x86_64 only: the runner is x86_64 (the aarch64 RPM is covered by
+          # the cross-build's payload check and rpmlint above).
+          rpm_file=$(ls $HOME/rpmbuild/RPMS/x86_64/equibop-*.rpm | grep -v debug | head -1)
+          echo "=== Installing $rpm_file (expect gtk/nss/alsa libs pulled) ==="
+          dnf in -y "$rpm_file" 2>&1 | tail -30
+          rpm -q equibop
+          rpm -V equibop
+          echo "### Install test passed :heavy_check_mark:" >> $GITHUB_STEP_SUMMARY

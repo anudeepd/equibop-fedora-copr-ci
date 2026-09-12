@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Curated AppStream metadata for the equibop COPR rewrap.
+     Upstream publishes org.equicord.equibop.metainfo.xml, but its
+     <launchable> names org.equicord.equibop.desktop while the RPM ships
+     equibop.desktop, and its screenshots reference remote URLs. This file
+     keeps the upstream RDNS id and content, fixes the launchable to the
+     shipped desktop file, and drops the remote screenshots. CI patches the
+     <release> version/date on each new upstream release. -->
+<component type="desktop-application">
+  <id>org.equicord.equibop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Equibop</name>
+  <summary>A snappy Discord desktop client</summary>
+  <description>
+    <p>Equibop is a custom Discord desktop client aiming to give you better performance and a range of useful features.</p>
+    <p>It ships Equicord preinstalled, with Linux screensharing, Wayland support, and Discord telemetry blocked out of the box.</p>
+  </description>
+  <categories>
+    <category>Network</category>
+    <category>InstantMessaging</category>
+  </categories>
+  <developer id="org.equicord">
+    <name>Equicord Contributors</name>
+  </developer>
+  <url type="homepage">https://github.com/Equicord/Equibop</url>
+  <url type="bugtracker">https://github.com/Equicord/Equibop/issues</url>
+  <url type="vcs-browser">https://github.com/Equicord/Equibop</url>
+  <launchable type="desktop-id">equibop.desktop</launchable>
+  <provides>
+    <binary>equibop</binary>
+  </provides>
+  <releases>
+    <release version="3.3.0" date="2026-09-05"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>
