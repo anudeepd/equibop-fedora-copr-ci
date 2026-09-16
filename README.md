@@ -2,7 +2,7 @@
 
 [Equibop](https://github.com/Equicord/Equibop) is a custom Discord desktop client with Equicord preinstalled, Linux screen sharing, Wayland support, and Discord telemetry blocked out of the box.
 
-This repo packages Equibop for Fedora by rewrapping the upstream prebuilt Linux RPMs (`equibop-3.3.0.x86_64.rpm` / `equibop-3.3.0.aarch64.rpm`) with a Fedora spec. Both `x86_64` and `aarch64` are supported, matching upstream's prebuilt release artifacts. A GitHub Actions workflow runs daily at 12AM UTC to check the latest release from https://github.com/Equicord/Equibop and rebuilds COPR only when a new version is published. Each downloaded RPM is verified against the sha512 published for that asset in the release's `latest-linux.yml` (x86_64) / `latest-linux-arm64.yml` (aarch64) before submission.
+This repo packages Equibop for Fedora by rewrapping the upstream prebuilt Linux RPMs (`equibop-<version>.x86_64.rpm` / `equibop-<version>.aarch64.rpm`) with a Fedora spec. Both `x86_64` and `aarch64` are supported, matching upstream's prebuilt release artifacts. A GitHub Actions workflow runs daily at 12AM UTC to check the latest release from https://github.com/Equicord/Equibop and rebuilds COPR only when a new version is published. Each downloaded RPM is verified against the sha512 published for that asset in the release's `latest-linux.yml` (x86_64) / `latest-linux-arm64.yml` (aarch64) before submission.
 
 The COPR project repository is available from: https://copr.fedorainfracloud.org/coprs/anudeepd/equibop
 
